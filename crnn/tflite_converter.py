@@ -9,7 +9,6 @@ import numpy as np
 print(tf.__version__)
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--config', type=Path, required=True, help='The config file path.')
 parser.add_argument('--pre', type=str, help='pre processing.')
 parser.add_argument('--weight',type=str, required=True, help='directory of weight')
 parser.add_argument('--export_dir',type=str, required=True, help='directory of export dir')
@@ -20,17 +19,22 @@ parser.add_argument("--int8", default=False, action="store_true")
 args = parser.parse_args()
 os.makedirs(args.export_dir, exist_ok=True)
 
-dir_list=['pb_dir']
-if args.fp32: dir_list.append('tflite_fp32')
-if args.fp16: dir_list.append('tflite_fp16')
-if args.int8: dir_list.append('tflite_int8')
+# Specify GPU usuage
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    # Restrict TensorFlow to only use the first GPU
+    print(gpus)
+    try:
+        for i in range(len(gpus)):
+            mem = 1024 * 4
+            tf.config.set_visible_devices(gpus[i], 'GPU')
+            tf.config.set_logical_device_configuration(gpus[i], [tf.config.LogicalDeviceConfiguration(memory_limit=mem)])
+    except RuntimeError as e:
+        # Visible devices must be set before GPUs have been initialized
+        print(e)
 
-for subdir in dir_list:
-    os.makedirs(os.path.join(args.export_dir, subdir), exist_ok=True)
-with args.config.open() as f:
-    config = yaml.load(f, Loader=yaml.Loader)['dataset_builder']
-with open(config['table_path']) as f:
-    num_classes = len(f.readlines())
+# Print Parameters 
+tf.keras.models.load_model(args.weight).summary()
 
 # Testing Load and Inference pb graph
 loaded=tf.saved_model.load(args.weight)
@@ -39,7 +43,6 @@ infer = loaded.signatures[list(loaded.signatures.keys())[0]]
 print('infer.structured_input_signature', infer.structured_input_signature)
 print('infer.structured_outputs', infer.structured_outputs)
 INPUT_SHAPE=tuple(infer.structured_input_signature[1]['x'].shape)
-
 # pb Inference
 image = np.zeros(INPUT_SHAPE).astype(np.float32)
 print('input image detaial', image.shape, image.dtype)
@@ -59,7 +62,7 @@ if args.fp32:
     print('successfully convert tflite fp32 model')
 
     # Save the model.
-    with open(os.path.join(args.export_dir, 'tflite_fp32','model.tflite'), 'wb') as f:
+    with open(os.path.join(args.export_dir, 'model_fp32.tflite'), 'wb') as f:
       f.write(tflite_model)
     f.close()
     print('successfully save tflite fp32 model')
@@ -67,7 +70,7 @@ if args.fp32:
     ##########################################
     # Load TFlite model and inference        #
     ##########################################
-    interpreter = tf.lite.Interpreter(os.path.join(args.export_dir, 'tflite_fp32','model.tflite'))
+    interpreter = tf.lite.Interpreter(os.path.join(args.export_dir, 'model_fp32.tflite'))
     # There is only 1 signature defined in the model,
     # so it will return it by default.
     # If there are multiple signatures then we can pass the name.
@@ -105,7 +108,7 @@ if args.fp16:
     print('successfully convert tflite fp16 model')
 
     # Save the model.
-    with open(os.path.join(args.export_dir, 'tflite_fp16','model.tflite'), 'wb') as f:
+    with open(os.path.join(args.export_dir, 'model_fp16.tflite'), 'wb') as f:
       f.write(tflite_model)
     f.close()
     print('successfully save tflite fp16 model')
@@ -113,7 +116,7 @@ if args.fp16:
     ##########################################
     # Load TFlite model and inference        #
     ##########################################
-    interpreter = tf.lite.Interpreter(os.path.join(args.export_dir, 'tflite_fp16','model.tflite'))
+    interpreter = tf.lite.Interpreter(os.path.join(args.export_dir, 'model_fp16.tflite'))
     # There is only 1 signature defined in the model,
     # so it will return it by default.
     # If there are multiple signatures then we can pass the name.
@@ -159,13 +162,14 @@ if args.int8:
       tf.lite.OpsSet.TFLITE_BUILTINS_INT8
     ]
     # Set the input and output tensors to uint8 (APIs added in r2.3)
-    converter.inference_input_type = tf.int8
-    converter.inference_output_type = tf.int8
+    converted_model_name='model_int8_inpuint8_outuint8.tflite'
+    converter.inference_input_type = tf.uint8
+    converter.inference_output_type = tf.uint8
     tflite_model = converter.convert()
     print('successfully convert tflite int8 model')
 
     # Save the model
-    with open(os.path.join(args.export_dir, 'tflite_int8','model.tflite'), 'wb') as f:
+    with open(os.path.join(args.export_dir, converted_model_name), 'wb') as f:
       f.write(tflite_model)
     f.close()
     print('successfully save tflite int8 model')
@@ -175,7 +179,7 @@ if args.int8:
     # Load TFlite model and inference        #
     ##########################################
     # Load the TFLite model in TFLite Interpreter
-    interpreter = tf.lite.Interpreter(os.path.join(args.export_dir, 'tflite_int8', 'model.tflite'))
+    interpreter = tf.lite.Interpreter(os.path.join(args.export_dir, converted_model_name))
     # There is only 1 signature defined in the model,
     # so it will return it by default.
     # If there are multiple signatures then we can pass the name.
@@ -185,7 +189,7 @@ if args.int8:
     print('int8 output_details', output_details)
     
     interpreter.allocate_tensors()
-    interpreter.set_tensor(input_details["index"], np.zeros(INPUT_SHAPE, dtype=np.int8))
+    interpreter.set_tensor(input_details["index"], np.zeros(INPUT_SHAPE, dtype=input_details['dtype']))
     interpreter.invoke()
     output = interpreter.get_tensor(output_details["index"])
 

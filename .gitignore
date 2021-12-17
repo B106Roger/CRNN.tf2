@@ -8,5 +8,11 @@ logs/
 demo/
 data_vis/
 stn_vis/
+stn_log/
+crnn_log/
 libdevice.10.bc
 export_dir/
+crnn/label_generate.py
+logs_crnn/
+logs_stn/
+full_model_list/

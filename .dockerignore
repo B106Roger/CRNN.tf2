@@ -3,3 +3,7 @@ __pycache__/
 
 .vscode/
 models/
+stn_log/
+crnn_log/
+logs/
+demo/

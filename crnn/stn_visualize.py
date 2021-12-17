@@ -9,7 +9,7 @@ import shutil
 import matplotlib.pyplot as plt
 
 from dataset_factory import DatasetBuilder
-from losses import CTCLoss, LossBox
+from losses import CTCLoss, LossBox, SliceLoss
 from metrics import SequenceAccuracy, EditDistance
 from models import build_model
 from layers.stn import BilinearInterpolation
@@ -19,13 +19,26 @@ parser.add_argument('--config', type=str, required=True, help='The config file p
 parser.add_argument('--weight', type=str, default='', required=False, help='The saved weight path.')
 parser.add_argument('--structure', type=str, default='', required=False, help='The saved structure path.')
 parser.add_argument('--iou', type=float, default=0.5, required=False, help='IoU threshold')
+parser.add_argument("--slice", default=False, action="store_true")
 args = parser.parse_args()
 args.point4=True
 if args.structure == '':
     args.structure = os.path.join(os.path.dirname(args.weight), 'structure.h5')
 
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    # Restrict TensorFlow to only use the first GPU
+    print(gpus)
+    try:
+        for i in range(len(gpus)):
+            mem = 1024 * 10 if i == 0 else 1024 * 8
+            tf.config.set_visible_devices(gpus[i], 'GPU')
+            tf.config.set_logical_device_configuration(gpus[i], [tf.config.LogicalDeviceConfiguration(memory_limit=mem)])
+    except RuntimeError as e:
+        # Visible devices must be set before GPUs have been initialized
+        print(e)
 
-batch_size=16
+batch_size=256
 
 with open(args.config) as f:
     parse_config = yaml.load(f, Loader=yaml.Loader)
@@ -43,36 +56,42 @@ shutil.rmtree(true_path, ignore_errors=True)
 os.makedirs(false_path, exist_ok=True)
 os.makedirs(true_path, exist_ok=True)
 
-dataset_builder = DatasetBuilder(**config['dataset_builder'], require_coords=args.point4)
-ds = dataset_builder(config['ann_paths'], config['batch_size'], False)
-val_ds = dataset_builder(train_conf['val_ann_paths'], batch_size, False)
+dataset_builder = DatasetBuilder(**config['dataset_builder'],  require_coords=True, location_only=True)
+ds = dataset_builder(config['ann_paths'], config['batch_size'], False, args.slice)
+val_ds = dataset_builder(train_conf['val_ann_paths'], batch_size, False, args.slice)
 model = tf.keras.models.load_model(args.structure, custom_objects={
     'BilinearInterpolation': BilinearInterpolation
 }, compile=False)
 model.load_weights(args.weight)
 
-inputs=model.layers[0].input
-if args.point4:
-    outputs1=model.get_layer('ctc_logits').output
-    outputs2=model.get_layer('stn').output
-    model = tf.keras.Model(inputs, [outputs1, outputs2])
-else:
-    outputs1=model.get_layer('ctc_logits').output
-    model = tf.keras.Model(inputs, outputs1)
+# inputs=model.layers[0].input
+# if args.point4:
+#     outputs1=model.get_layer('ctc_logits').output
+#     outputs2=model.get_layer('stn').output
+#     if args.slice:
+#         output3=model.get_layer('slice_logits').output
+#         model = tf.keras.Model(inputs, [outputs1, outputs2, output3])
+#     else:
+#         model = tf.keras.Model(inputs, [outputs1, outputs2])
+# else:
+#     outputs1=model.get_layer('ctc_logits').output
+#     model = tf.keras.Model(inputs, outputs1)
 model.summary()
 
-print(model.output_names)
-if args.point4:
-    loss_dict={ 
-        model.output_names[0]: [CTCLoss()],
-        model.output_names[1]: [LossBox()] 
-    }
-    metrics_dict={ model.output_names[0]: [SequenceAccuracy(), EditDistance()] }
-else:
-    loss_dict=[CTCLoss()]
-    metrics_dict=[SequenceAccuracy(), EditDistance()]
+# print(model.output_names)
+# if args.point4:
+#     loss_dict={ 
+#         model.output_names[0]: [CTCLoss()],
+#         model.output_names[1]: [LossBox()]
+#     }
+#     if args.slice:
+#         loss_dict={[model.output_names[2]]: [SliceLoss()]}
+#     metrics_dict={ model.output_names[0]: [SequenceAccuracy(), EditDistance()] }
+# else:
+#     loss_dict=[CTCLoss()]
+#     metrics_dict=[SequenceAccuracy(), EditDistance()]
 
-model.compile(loss=loss_dict, metrics=metrics_dict)
+# model.compile(loss=loss_dict, metrics=metrics_dict)
 
 def get_predict_point(transform_mat):
     """
@@ -115,10 +134,26 @@ w_list=[]
 label_list=[]
 total=0
 acc = 0
-for i, (images, (ctc_label, stn_label)) in enumerate(val_ds):    
-    ctc_pred, transform_mat = model(images)
+for i, (images, a) in enumerate(val_ds):
+    if args.slice:
+        (ctc_label, stn_label, slice_gth)=a
+        ctc_pred, transform_mat, slice_map = model(images)
+    else:
+        # (ctc_label, stn_label)=a
+        # ctc_pred, transform_mat = model(images)
+        stn_label=a[0]
+        transform_mat = model(images)
+
 
     images = images.numpy()
+    if args.slice:
+        print(slice_gth.shape)
+        slice_gth=np.repeat(slice_gth.numpy(), 3, axis=-1)
+        slice_gth=np.repeat(slice_gth, 10, axis=1)
+
+        slice=np.repeat(slice_map.numpy(), 3, axis=-1)
+        slice=np.repeat(slice, 10, axis=1)
+        images=np.concatenate([images, slice_gth, slice], axis=1)
     transform_mat = transform_mat.numpy()
     stn_label = stn_label.numpy()
     images = (images*255.).astype(np.uint8)
@@ -132,9 +167,6 @@ for i, (images, (ctc_label, stn_label)) in enumerate(val_ds):
         for iii in range(4):
             # images[ii] = cv2.circle(img, tuple(g_goord[ii,2*iii:2*(iii+1)]), 3, (255, 0, 0), -1)
             images[ii] = cv2.circle(img, tuple(p_coord[ii,2*iii:2*(iii+1)]), 3, (0, 0, 255), -1)
-
-
-
 
     if False:
         image1 = np.vstack(images[:batch_size//2])

@@ -21,10 +21,15 @@ import os
 parser = argparse.ArgumentParser()
 parser.add_argument('--config', type=Path, required=True, help='The config file path.')
 parser.add_argument('--images', type=str, required=True, help='The image file path.')
-parser.add_argument('--structure', type=str, required=True, help='Model Structure')
+parser.add_argument('--structure', type=str, default='', help='Model Structure')
 parser.add_argument('--weight', type=str, default='', required=False, help='Model Weight')
 parser.add_argument('--count', type=int, default=30, required=False, help='number of image to demo')
+feature_parser = parser.add_mutually_exclusive_group(required=False)
+feature_parser.add_argument('--pure_crnn', dest='pure_crnn', action='store_true')
+feature_parser.add_argument('--no-pure_crnn', dest='pure_crnn', action='store_false')
+parser.set_defaults(pure_crnn=False)
 args = parser.parse_args()
+
 if args.structure == '':
     args.structure = os.path.join(os.path.dirname(args.weight), 'structure.h5')
 
@@ -69,35 +74,73 @@ if args.weight: model_old.load_weights(args.weight)
 
 input_tensor=model_old.input
 output_tensor1=model_old.get_layer('ctc_logits').output
-output_tensor2=model_old.get_layer('bilinear_interpolation').output
+if args.pure_crnn:
+    output_tensor2=model_old.input
+else:
+    output_tensor2=model_old.get_layer('bilinear_interpolation').output
 model = tf.keras.Model(inputs=input_tensor, outputs=[output_tensor1, output_tensor2])
 
 
 model_pre = keras.layers.experimental.preprocessing.Rescaling(1./255)
 model_post = CTCGreedyDecoder(config['dataset_builder']['table_path'])
-model.build((None, 48, None, 3))
+model.build((None, 48, 48, 3))
 model.summary()
+
+save_model=tf.keras.Model(inputs=input_tensor, outputs=[output_tensor1])
+save_model.summary()
+full_crnn_run = tf.function(lambda x: save_model(x))
+full_crnn_concrete_func = full_crnn_run.get_concrete_function(tf.TensorSpec([1,48,200,3], save_model.inputs[0].dtype))
+save_model.save(os.path.join(os.path.dirname(args.weight), '..', 'full_crnn2'), save_format="tf", signatures=full_crnn_concrete_func)
 
 shutil.rmtree('demo', ignore_errors=True)
 os.makedirs('demo', exist_ok=True)
 
-img_paths = []
-for prefix in ['*.jpg','*.png']:
-    img_paths = img_paths + glob.glob(os.path.join(args.images, prefix))
-    
+if os.path.isdir(args.images):
+    compute_acc=False
+    img_paths = []
+    for prefix in ['*.jpg','*.png']:
+        img_paths = img_paths + glob.glob(os.path.join(args.images, prefix))
+else:
+    compute_acc=True
+    img_paths=[]
+    label_list=[]
+    label_file=open(args.images, 'r')
+    label_lines=label_file.readlines()
+    for line in label_lines:
+        line_split=line.split()
+        image_name=line_split[0]
+        label_item=line_split[1]
+        img_paths.append(os.path.join(os.path.dirname(args.images), image_name))
+        label_list.append(label_item)
+
+acc=0.0
+total=0
 for i,img_path in enumerate(img_paths):
     if i == args.count: break
+    total+=1
     img_path = str(img_path)
     img = read_img_and_resize(img_path, config['dataset_builder']['img_shape'])
     img = tf.expand_dims(img, 0)
+    img = tf.repeat(img, 3, axis=0)
     padding = tf.zeros((1, tf.shape(img)[1], 50, 3))
-    img = tf.concat([padding, img, padding], axis=2)
 
     result = model_pre(img)
-    result, interpolate_img = model(result)
-    result = model_post(result)
-    
-    print(f'Path: {img_path}, y_pred: {result[0].numpy()}',  f'probability: {result[1].numpy()}')
+    # raw_res, interpolate_img = model(result)
+    # result = model_post(raw_res)
+    result=save_model(result)
+    print(result)
+    result, prob=result[0]
+
+    prefix=''
+    if compute_acc: 
+        pred=result[0].numpy()
+        if pred[0].decode("utf-8")==label_list[i]: 
+            acc+=1
+        else:
+            prefix='wrong'
+
+    raw_res=np.argmax(raw_res, -1)
+    print(f'Path: {img_path}, y_pred: {result[0].numpy()}',  f'probability: {result[1].numpy()} current acc: {acc / total}', 'raw_res: ', raw_res)
 
     predict_string=result[0].numpy()[0].decode('utf-8')
     embedding_string=f'{predict_string}'
@@ -121,6 +164,6 @@ for i,img_path in enumerate(img_paths):
     demo_img = np.hstack([img, stn_img])
 
 
-    imgname = img_path.split('/')[-1]
-    savepath=os.path.join('demo',imgname)
+    imgname = f"{prefix}_{img_path.split('/')[-1]}" if prefix != "" else img_path.split('/')[-1]
+    savepath=os.path.join('demo', imgname)
     cv2.imwrite(savepath, demo_img)
