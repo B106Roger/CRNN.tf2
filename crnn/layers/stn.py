@@ -18,7 +18,7 @@ class BilinearInterpolation(Layer):
         super(BilinearInterpolation, self).__init__(dynamic=dynamic, **kwargs)
 
     def get_config(self):
-        return {'output_size': self.output_size}
+        return {'output_size': self.output_size, 'name': self.name}
         
     def build(self, input_shapes):
         if len(input_shapes) == 2:

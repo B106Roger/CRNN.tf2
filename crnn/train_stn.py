@@ -1,5 +1,4 @@
 import argparse
-import enum
 import pprint
 import shutil
 import os
@@ -9,15 +8,31 @@ import yaml
 from dataset_factory import DatasetBuilder
 from losses import LossBox
 from metrics import BoxAccuracy
-from models import build_model, build_pure_stn
+from models import build_pure_stn, NoOpQuantizeConfig, apply_quantization_to_all
 from callbacks.callbacks import ImageCallback
+from layers.stn import BilinearInterpolation
+import tensorflow_model_optimization as tfmot
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--config', type=Path, required=True, help='The config file path.')
 parser.add_argument('--save_dir', type=Path, required=True, help='The path to save the models, logs, etc.')
 parser.add_argument('--weight', type=str, default='', required=False, help='The pretrained weight of model.')
+parser.add_argument('--qat', dest='qat', default=False, action="store_true", help="determine whether to use quantilization aware training or not.")
 args = parser.parse_args()
 
+if os.path.exists(args.save_dir):
+    print("""
+******************************************
+****************  Warning ****************
+******************************************
+The folder already exist, do you really 
+want overwrite the content of the folder ?
+""")
+    choice=input("Y/N: ")
+    print(choice)
+    if choice[0] == "N" or choice[1] == "n":
+        print("choose another folder name please")
+        exit()
 os.makedirs(f'{args.save_dir}/weights', exist_ok=True)
 os.makedirs(f'{args.save_dir}/configs', exist_ok=True)
 
@@ -30,7 +45,7 @@ if gpus:
     print(gpus)
     try:
         for i in range(len(gpus)):
-            mem = 1024 * 5 if i == 0 else 1024 * 10
+            mem = 1024 * 10 if i == 0 else 1024 * 10
             tf.config.set_visible_devices(gpus[i], 'GPU')
             tf.config.set_logical_device_configuration(gpus[i], [tf.config.LogicalDeviceConfiguration(memory_limit=mem)])
     except RuntimeError as e:
@@ -60,6 +75,7 @@ batch_size = config['batch_size_per_replica']
 print(config['dataset_builder'])
 dataset_builder = DatasetBuilder(**config['dataset_builder'], require_coords=True, location_only=True)
 train_ds = dataset_builder(config['train_ann_paths'], batch_size, True, slice=False)
+# train_ds = train_ds.repeat(2)
 val_ds = dataset_builder(config['val_ann_paths'], batch_size, False, slice=False)
 
 img_shape=config['dataset_builder']['img_shape']
@@ -68,6 +84,17 @@ lr=config['lr_schedule']['initial_learning_rate']
 opt=tf.keras.optimizers.Adam(lr)
 
 stn_model, vis_model=build_pure_stn(img_shape=img_shape, interpolation_size=interpolate_shape, model_type=2)
+if args.qat:
+    stn_model.summary()
+    with tfmot.quantization.keras.quantize_scope({
+        'NoOpQuantizeConfig': NoOpQuantizeConfig,
+        'BilinearInterpolation':BilinearInterpolation,
+        }):
+        stn_model=tf.keras.models.clone_model(
+            stn_model,
+            clone_function=apply_quantization_to_all
+        )
+        stn_model=tfmot.quantization.keras.quantize_apply(stn_model)
 stn_model.compile(optimizer=opt, loss=[LossBox()], metrics=[BoxAccuracy()])
 stn_model.save(os.path.join(args.save_dir, 'weights', 'structure.h5'), include_optimizer=False)
 stn_model.summary()

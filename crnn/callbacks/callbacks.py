@@ -105,7 +105,7 @@ class ImageCallback2(keras.callbacks.Callback):
           as inputs and returns a new learning rate as output (float).
   """
 
-    def __init__(self, folder, dataset, model_vis, require_coords, slice, row=8, count=2, location_only=False):
+    def __init__(self, folder, dataset, model_vis, require_coords, slice=False, row=8, count=2, location_only=False):
         super(ImageCallback2, self).__init__()
         shutil.rmtree(folder, ignore_errors=True)
         os.makedirs(folder)
@@ -120,6 +120,7 @@ class ImageCallback2(keras.callbacks.Callback):
     
 
     def on_epoch_end(self, epoch, logs={}):
+        if epoch %10 != 0: return 
         for i, (images,labels) in enumerate(self.dataset, 1):
             if self.require_coords:
                 if self.slice:
@@ -134,7 +135,7 @@ class ImageCallback2(keras.callbacks.Callback):
                         label, coords=labels
             else:
                 label=labels[0]
-            
+            print('images',images.shape)
             label=tf.sparse.to_dense(label).numpy()
             pred_res, stn_result = self.model_vis(images, training=False)
             # for _i in range(len(pred_res)):
@@ -175,7 +176,7 @@ class ImageCallback2(keras.callbacks.Callback):
             label_canvas[:,0]=255
             # total image
             filename = f'epoch_{epoch}_{i}.png'
-            # print(images.shape, stn_result.shape, label_canvas.shape)
+            
             show_result = np.concatenate([images, stn_result, label_canvas], axis=1)
             cv2.imwrite(os.path.join(self.folder, filename), show_result[...,::-1])
             if i == self.count: break

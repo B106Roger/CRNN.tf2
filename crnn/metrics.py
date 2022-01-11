@@ -52,6 +52,10 @@ class SequenceAccuracy(keras.metrics.Metric):
     def reset_states(self):
         self.count.assign(0)
         self.total.assign(0)
+    
+    def reset_state(self):
+        self.count.assign(0)
+        self.total.assign(0)
 
 
 class BoxAccuracy(keras.metrics.Metric):
@@ -59,6 +63,8 @@ class BoxAccuracy(keras.metrics.Metric):
         super().__init__(name=name, **kwargs)
         self.total = self.add_weight(name='total', initializer='zeros')
         self.count = self.add_weight(name='count', initializer='zeros')
+        self.iou = self.add_weight(name="iou", initializer='zeros')
+
         self.iou_threshold = iou_threshold
         self.stn_points = tf.constant([[ 
             [-1.0, -1.0, 1.0], # Left  Top
@@ -85,15 +91,20 @@ class BoxAccuracy(keras.metrics.Metric):
 
         self.total.assign_add(batch_size)
         self.count.assign_add(num_correct)
+        self.iou.assign_add(tf.reduce_sum(iou_val))
         # Return List of Correct Case(1 is correct, 0 is wrong)
         return correct_list
 
     def result(self):
         return self.count / self.total
 
+    def result_iou(self):
+        return self.iou / self.total
+
     def reset_states(self):
         self.count.assign(0)
         self.total.assign(0)
+        self.iou.assign(0)
 
 
 class EditDistance(keras.metrics.Metric):

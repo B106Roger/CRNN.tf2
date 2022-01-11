@@ -6,12 +6,9 @@ import os
 import numpy as np
 import tensorflow as tf
 import tensorflow_addons as tfa
-from decoders import CTCGreedyDecoder, CTCBeamSearchDecoder
-from dataset_factory import DatasetBuilder
-from losses import CTCLoss, LossBox
-from metrics import SequenceAccuracy, EditDistance
-from models import build_model
+from models import NoOpQuantizeConfig
 from layers.stn import BilinearInterpolation
+import tensorflow_model_optimization as tfmot
 print(tf.__version__)
 
 parser = argparse.ArgumentParser()
@@ -19,6 +16,7 @@ parser.add_argument('--stn_weight', type=str, required=False, help='The weight p
 parser.add_argument('--crnn_weight', type=str, required=False, help='The weight path to crnn_model(h5 file)')
 parser.add_argument('--merge', dest='merge', default=False, action='store_true', help="Merge heavy stn and crnn model.")
 parser.add_argument('--merge_path', type=str, required=False, help="The path to save merge model")
+parser.add_argument('--qat', action="store_true", default=False, help="whether the training model is Quantize Aware Training.")
 parser.add_argument('--config', type=Path, required=True, help="""
 The training configuration to the target mdoel
 If merge == true, then it should be the config file of stn_weight.
@@ -39,19 +37,35 @@ def test_model(model):
     print('input image detaial', image.shape, image.dtype)
     result = model(image)
     print("successfully do inference in savemodel")
-    print('result of output', result.shape, result.dtype)
-
+    if not isinstance(model.output, list):
+        print('result of output', result.shape, result.dtype)
+    else:
+        print('result of output ', end='')
+        for data_point in result:
+            print(data_point.shape, data_point.dtype, end=' ')
+        print()
 if args.stn_weight is not None:
     low_resolution_shape=config['dataset_builder']['img_shape']
     low_resolution_shape.insert(0, 1)
     ###############################################
     ##########     Loading Model File    ##########
     ###############################################
-    model = tf.keras.models.load_model(
-        os.path.join(os.path.dirname(args.stn_weight), 'structure.h5'),
-        compile=False, custom_objects={ 'BilinearInterpolation': BilinearInterpolation }
-    )
-    model.load_weights(args.stn_weight)
+    if args.qat:
+        with tfmot.quantization.keras.quantize_scope({
+            'NoOpQuantizeConfig': NoOpQuantizeConfig,
+            'BilinearInterpolation':BilinearInterpolation,
+        }): 
+            model = tf.keras.models.load_model(
+                os.path.join(os.path.dirname(args.stn_weight), 'structure.h5'),
+                compile=False, custom_objects={ 'BilinearInterpolation': BilinearInterpolation }
+            )
+            model.load_weights(args.stn_weight)
+    else:
+        model = tf.keras.models.load_model(
+            os.path.join(os.path.dirname(args.stn_weight), 'structure.h5'),
+            compile=False, custom_objects={ 'BilinearInterpolation': BilinearInterpolation }
+        )
+        model.load_weights(args.stn_weight)
     model.summary()
     
     ###############################################
@@ -87,11 +101,22 @@ if args.crnn_weight is not None:
     ###############################################
     ##########     Loading Model File    ##########
     ###############################################
-    model = tf.keras.models.load_model(
-        os.path.join(os.path.dirname(args.crnn_weight), 'structure.h5'),
-        compile=False, custom_objects={'BilinearInterpolation': BilinearInterpolation }
-    )
-    model.load_weights(args.crnn_weight)
+    if args.qat:
+        with tfmot.quantization.keras.quantize_scope({
+            'NoOpQuantizeConfig': NoOpQuantizeConfig,
+            'BilinearInterpolation':BilinearInterpolation,
+        }): 
+            model = tf.keras.models.load_model(
+                os.path.join(os.path.dirname(args.crnn_weight), 'structure.h5'),
+                compile=False, custom_objects={'BilinearInterpolation': BilinearInterpolation }
+            )
+            model.load_weights(args.crnn_weight)
+    else:
+        model = tf.keras.models.load_model(
+            os.path.join(os.path.dirname(args.crnn_weight), 'structure.h5'),
+            compile=False, custom_objects={'BilinearInterpolation': BilinearInterpolation }
+        )
+        model.load_weights(args.crnn_weight)
     model.summary()
     model_input_shape=model.input.shape
     image_shape=(1, *model_input_shape[1:])
@@ -102,7 +127,10 @@ if args.crnn_weight is not None:
     # input_tensor=model.input
     input_tensor = model.input
     print(input_tensor)
-    x0=model.get_layer('ctc_logits').output
+    if args.qat:
+        x0=model.get_layer('quant_ctc_logits').output
+    else:
+        x0=model.get_layer('ctc_logits').output
     # x0=CTCGreedyDecoder(config['dataset_build er']['table_path'])(x0)
     crnn_model=tf.keras.Model(input_tensor, x0, name='crnn_model')
     crnn_model.compile()

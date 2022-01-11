@@ -1,10 +1,10 @@
 import argparse
-from pathlib import Path
-import cv2
 import yaml
 import tensorflow as tf
 import os
 import numpy as np
+from tqdm import tqdm
+from dataset_factory import DatasetBuilder
 
 print(tf.__version__)
 
@@ -15,6 +15,8 @@ parser.add_argument('--export_dir',type=str, required=True, help='directory of e
 parser.add_argument('--fp32', default=False, action="store_true")
 parser.add_argument('--fp16', default=False, action="store_true")
 parser.add_argument("--int8", default=False, action="store_true")
+parser.add_argument("--config", type=str, help="Quantilize with respect to the target dataset.(provide quantilization\
+   dataset can further increase the performance of quantilization result.)")
 
 args = parser.parse_args()
 os.makedirs(args.export_dir, exist_ok=True)
@@ -26,7 +28,7 @@ if gpus:
     print(gpus)
     try:
         for i in range(len(gpus)):
-            mem = 1024 * 4
+            mem = 1024 * 10
             tf.config.set_visible_devices(gpus[i], 'GPU')
             tf.config.set_logical_device_configuration(gpus[i], [tf.config.LogicalDeviceConfiguration(memory_limit=mem)])
     except RuntimeError as e:
@@ -46,10 +48,14 @@ INPUT_SHAPE=tuple(infer.structured_input_signature[1]['x'].shape)
 # pb Inference
 image = np.zeros(INPUT_SHAPE).astype(np.float32)
 print('input image detaial', image.shape, image.dtype)
-result = loaded(image)
-print("successfully do inference in savemodel")
-print('result of output', result.shape, result.dtype)
-print("CRNN has {} trainable variables, ...".format(len(loaded.trainable_variables)))
+# result = loaded(image)
+# print("successfully do inference in savemodel")
+# if len(infer.structured_outputs) == 1:
+#   print('result of output', result.shape, result.dtype)
+# else:
+#   print('result of output ', end='')
+#   for data in result:
+#     print(data.shape, data.dtype, end=' ')
 # for v in loaded.trainable_variables:
 #     print(v.name)
 
@@ -147,24 +153,37 @@ if args.int8:
     ##########################################
     # Load save_model and Convert to TFlite  #
     ##########################################
-    train_images=np.zeros((200, INPUT_SHAPE[1],INPUT_SHAPE[2],INPUT_SHAPE[3]), dtype=np.float32)
-    def representative_data_gen():
-      for input_value in tf.data.Dataset.from_tensor_slices(train_images).batch(1).take(100):
-        yield [input_value]
-      
+    if args.config is not None:
+      with open(args.config, 'r') as f:
+        config = yaml.load(f, Loader=yaml.Loader)['train']
+        config['dataset_builder']['img_shape']=INPUT_SHAPE[1:]
+      dataset_builder = DatasetBuilder(**config['dataset_builder'], require_coords=True, location_only=True)
+      train_ds = dataset_builder(config['train_ann_paths'], 1, False, slice=False)
+      train_ds = train_ds.map(lambda img, label: img)
+      # random100   0.3
+      # 500,        0.4081
+      # full,       
+      def representative_data_gen():
+        for  input_value in tqdm(train_ds.take(2000)):
+          yield [input_value]
+          
+    else:
+      train_images=np.random.uniform(size=(2000, INPUT_SHAPE[1],INPUT_SHAPE[2],INPUT_SHAPE[3])).astype(dtype=np.float32)
+      def representative_data_gen():
+        for input_value in tf.data.Dataset.from_tensor_slices(train_images).batch(1).take(100):
+          yield [input_value]
+          
     converter = tf.lite.TFLiteConverter.from_saved_model(args.weight)
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    converter.experimental_enable_resource_variables = True
     converter.representative_dataset = representative_data_gen
     converter.target_spec.supported_ops = [
       tf.lite.OpsSet.TFLITE_BUILTINS,
-      tf.lite.OpsSet.SELECT_TF_OPS,
       tf.lite.OpsSet.TFLITE_BUILTINS_INT8
     ]
     # Set the input and output tensors to uint8 (APIs added in r2.3)
-    converted_model_name='model_int8_inpuint8_outuint8.tflite'
-    converter.inference_input_type = tf.uint8
-    converter.inference_output_type = tf.uint8
+    converted_model_name='model_int8_inpfp32_outfp32.tflite'
+    converter.inference_input_type = tf.float32
+    converter.inference_output_type = tf.float32
     tflite_model = converter.convert()
     print('successfully convert tflite int8 model')
 
@@ -180,6 +199,7 @@ if args.int8:
     ##########################################
     # Load the TFLite model in TFLite Interpreter
     interpreter = tf.lite.Interpreter(os.path.join(args.export_dir, converted_model_name))
+    interpreter.allocate_tensors()
     # There is only 1 signature defined in the model,
     # so it will return it by default.
     # If there are multiple signatures then we can pass the name.
@@ -188,10 +208,12 @@ if args.int8:
     print('int8 input_details', input_details)
     print('int8 output_details', output_details)
     
-    interpreter.allocate_tensors()
-    interpreter.set_tensor(input_details["index"], np.zeros(INPUT_SHAPE, dtype=input_details['dtype']))
-    interpreter.invoke()
-    output = interpreter.get_tensor(output_details["index"])
+    for i in range(2):
+      input_tensor=(np.random.sample(INPUT_SHAPE)*5).astype(input_details['dtype'])
+      interpreter.set_tensor(input_details["index"], input_tensor)
+      interpreter.invoke()
+      output = interpreter.get_tensor(output_details["index"])
+      print(output)
 
     print('int8 output result', output.shape, output.dtype)
     print('successfully inference in tflite int8 model')

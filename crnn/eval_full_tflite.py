@@ -15,22 +15,17 @@ from dataset_factory import DatasetBuilder
 from metrics import BoxAccuracy, SequenceAccuracy
 from layers.stn import BilinearInterpolation
 
-def save_result(img, stn_img, result, decoder, label, prefix='1', ):
+def save_result(img, result, decoder, label, prefix='1', ):
     """
     img: (b, 64,320)
-    stn_img: (b, 48, 48)
     result: (b, 4, 12)
     """
     img=(img*255.0).astype(np.uint8)
-    if not isinstance(stn_img, np.ndarray): stn_img=stn_img.numpy()
-    stn_img=(stn_img*255.0).astype(np.uint8)
     result, scores=decoder(result)
     label=tf.sparse.to_dense(label, -1)
     
-    for i, (a_img, a_stn_img, a_result, score, a_label) in enumerate(zip(img, stn_img, result, scores, label)):
+    for i, (a_img, a_result, score, a_label) in enumerate(zip(img, result, scores, label)):
         h=a_img.shape[0]
-        a_stn_img=cv2.resize(a_stn_img, (h, h))
-        a_stn_img[:,0]=255
         a_canvas=np.zeros((h, h//2, 3), np.uint8)
 
         word=a_result.numpy()
@@ -46,12 +41,12 @@ def save_result(img, stn_img, result, decoder, label, prefix='1', ):
         cv2.rectangle(a_img, (0,0), (30,10), (0,0,0), -1)
         cv2.putText(a_img, a_label, (0,10), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3, color=(255,255,255))
         
-        a_img=np.concatenate([a_img, a_stn_img, a_canvas], axis=1)
+        a_img=np.concatenate([a_img, a_canvas], axis=1)
         # Correct
         correct = 'true' if word == a_label else 'false'
         cv2.imwrite(f'demo/{correct}/{prefix}_{i}.jpg', a_img[...,::-1])
 
-def evaluation(stn_model, crnn_model, model_aspect_ratio, dataset, bin=[115,256,576], visualize=False, decoder=None, point4=True):
+def evaluation(crnn_model, model_aspect_ratio, dataset, bin=[115,256,576], visualize=False, decoder=None, point4=True):
     seq_metric=SequenceAccuracy()
     box_metric=BoxAccuracy()
     bin_of_correct=np.zeros((len(bin)+1,), dtype=np.int32)
@@ -92,23 +87,15 @@ def evaluation(stn_model, crnn_model, model_aspect_ratio, dataset, bin=[115,256,
             batch_coords=tf.concat(batch_coords, axis=0)
         else: continue
 
-        if point4:
-            stn_img, stn_mat=stn_model(batch_images)
-        else:
-            stn_img=stn_model(batch_images)
         start_time=time.time()
-        crnn_res=crnn_model(stn_img)
-        
+        crnn_res=crnn_model(batch_images)
+        # print('elipse time: ', time.time() - start_time)
         if visualize:
-            save_result(batch_images, stn_img, crnn_res, decoder, batch_labels, i)
+            save_result(batch_images, crnn_res, decoder, batch_labels, i)
 
         seq_correct=seq_metric.update_state(batch_labels, crnn_res).numpy().astype(np.int32)
-        if point4:
-            box_correct=box_metric.update_state(batch_coords, stn_mat).numpy().astype(np.int32)
-        else:
-            box_correct=np.zeros((len(batch_coords),), dtype=np.int32)
         for ii in range(len(seq_correct)):
-            confusion_matrix[1-box_correct[ii], 1-seq_correct[ii]] += 1
+            confusion_matrix[0, 1-seq_correct[ii]] += 1
             h, w=batch_shapes[ii][:2]
             normalize_w=(batch_coords[ii,2]-batch_coords[ii,0])/2.0
             normalize_h=(batch_coords[ii,3]-batch_coords[ii,1])/2.0
@@ -132,21 +119,13 @@ def evaluation(stn_model, crnn_model, model_aspect_ratio, dataset, bin=[115,256,
         batch_labels=tf.sparse.concat(0, batch_labels, expand_nonconcat_dims =True)
         batch_coords=tf.concat(batch_coords, axis=0)
         # model
-        if point4:
-            stn_img, stn_mat=stn_model(batch_images)
-        else:
-            stn_img=stn_model(batch_images)
-        crnn_res=crnn_model(stn_img)
+        crnn_res=crnn_model(batch_images)
         # metric
         seq_correct=seq_metric.update_state(batch_labels, crnn_res).numpy().astype(np.int32)
-        if point4:
-            box_correct=box_metric.update_state(batch_coords, stn_mat).numpy().astype(np.int32)
-        else:
-            box_correct=np.zeros((len(batch_coords),), dtype=np.int32)
         if visualize:
-            save_result(batch_images, stn_img, crnn_res, decoder, batch_labels, i)
+            save_result(batch_images, crnn_res, decoder, batch_labels, i)
         for ii in range(len(seq_correct)):
-            confusion_matrix[1-box_correct[ii], 1-seq_correct[ii]] += 1
+            confusion_matrix[0, 1-seq_correct[ii]] += 1
             h, w=batch_shapes[ii][:2]
             normalize_w=batch_coords[ii,2]-batch_coords[ii,0]
             normalize_h=batch_coords[ii,3]-batch_coords[ii,1]
@@ -205,8 +184,6 @@ def evaluation(stn_model, crnn_model, model_aspect_ratio, dataset, bin=[115,256,
     ''')
 
     print(f'seq_acc: {seq_metric.result():8.6f}')
-    print(f'box_acc: {box_metric.result():8.6f}')
-    print(f'box_iou: {box_metric.result_iou():8.6f}')
     return bin_of_correct, bin_of_wrong, confusion_matrix
 
 
@@ -214,9 +191,6 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help='The config file path.')
     parser.add_argument('--crnn_weight', type=str, default='', required=False, help='The saved crnn path.(h5py and savemodel format supported')
-    parser.add_argument('--stn_weight', type=str, default='', required=False, help='The saved stn path.(h5py format supported only)')
-    parser.add_argument('--point4', dest='point4', default=False, action='store_true', help="Require box accuracy as one of the metric")
-    parser.add_argument('--qat', dest='qat', default=False, action='store_true', help="Is the model is Quantize Aware Training Model")
 
     args = parser.parse_args()
 
@@ -246,12 +220,10 @@ if __name__=='__main__':
     #######################################
     ######## Load Model            ########
     #######################################
-    stn_model=InferenceModel(args.stn_weight, 'stn_model', 'heavy_stn', args.qat)
-    crnn_model=InferenceModel(args.crnn_weight, 'crnn_model', 'crnn_model', args.qat)
-
+    crnn_model=InferenceModel(args.crnn_weight, 'crnn_model', 'crnn_model')
     decoder=CTCGreedyDecoder(parse_config['dataset_builder']['table_path'])
     # w/h
-    model_aspect_ratio=stn_model.input_shape[2] / stn_model.input_shape[1]
+    model_aspect_ratio=crnn_model.input_shape[2] / crnn_model.input_shape[1]
 
 
     ##########################################
@@ -262,4 +234,4 @@ if __name__=='__main__':
     # correct, wrong, confusion_matrix = evaluation(stn_model, crnn_model, model_aspect_ratio, train_ds, visualize=True, decoder=decoder, point4=args.point4)
     
     print('\n\nvalidation data')
-    correct, wrong, confusion_matrix = evaluation(stn_model, crnn_model, model_aspect_ratio, val_ds, visualize=True, decoder=decoder, point4=args.point4)
+    correct, wrong, confusion_matrix = evaluation(crnn_model, model_aspect_ratio, val_ds, visualize=True, decoder=decoder)
