@@ -1,0 +1,40 @@
+dataset_builder: &ds_builder
+  table_path: 'example/digit.txt'
+  # If change image height(32), change the net.
+  # If image width is not null, the image will be distorted.
+  # img_shape: [16, 64, 3]
+  img_shape: [32, 128, 3]
+
+
+  # The image that width greater than max img_width will be dropped.
+  # Only work with image width is null.
+  max_img_width: 500
+  # ignore_case: true
+
+train:
+  dataset_builder:
+    <<: *ds_builder
+  train_ann_paths:
+    - '../data/RealTrafficLight/0108_data_selection2/data/backbackground/real_back_label.txt'
+    - '../data/RealTrafficLight/0108_data_selection2/unknown/backbackground/target_heavy_stn.txt'
+  val_ann_paths:
+    - '../data/RealTrafficLight/0108_data_selection1/data/backbackground/real_back_label.txt'
+  batch_size_per_replica: 128
+  # Number of epochs to train.
+  epochs: 250
+  lr_schedule:
+    initial_learning_rate: 0.001
+    decay_steps: 4120
+    decay_rate: 0.997
+  # TensorBoard Arguments
+  # https://www.tensorflow.org/api_docs/python/tf/keras/callbacks/TensorBoard#arguments_1
+  tensorboard:
+    histogram_freq: 1
+    profile_batch: 0
+
+eval:
+  dataset_builder:
+    <<: *ds_builder
+  ann_paths:
+    - '../data/RealTrafficLight/0108_data_selection1/data/backbackground/real_back_label.txt'
+  batch_size: 256
