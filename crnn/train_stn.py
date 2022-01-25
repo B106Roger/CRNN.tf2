@@ -29,8 +29,7 @@ The folder already exist, do you really
 want overwrite the content of the folder ?
 """)
     choice=input("Y/N: ")
-    print(choice)
-    if choice[0] == "N" or choice[1] == "n":
+    if choice[0] == "N" or choice[0] == "n":
         print("choose another folder name please")
         exit()
 os.makedirs(f'{args.save_dir}/weights', exist_ok=True)
@@ -40,19 +39,9 @@ os.makedirs(f'{args.save_dir}/configs', exist_ok=True)
 #### Specify GPU usuage #####
 #############################
 gpus = tf.config.list_physical_devices('GPU')
-if gpus:
-    # Restrict TensorFlow to only use the first GPU
-    print(gpus)
-    try:
-        for i in range(len(gpus)):
-            mem = 1024 * 10 if i == 0 else 1024 * 10
-            tf.config.set_visible_devices(gpus[i], 'GPU')
-            tf.config.set_logical_device_configuration(gpus[i], [tf.config.LogicalDeviceConfiguration(memory_limit=mem)])
-    except RuntimeError as e:
-        # Visible devices must be set before GPUs have been initialized
-        print(e)
+gpu_options = tf.compat.v1.GPUOptions(per_process_gpu_memory_fraction=0.8)
+sess = tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(gpu_options=gpu_options))
 tf.config.optimizer.set_jit(True)
-
 
 #################################################
 ### Save All Tranining Script                 ###
@@ -115,5 +104,6 @@ callbacks = [
     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.318, patience=15, min_lr=1e-8, verbose=1),
     tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=51),
 ]
+
 stn_model.fit(train_ds, epochs=config['epochs'], callbacks=callbacks, validation_data=val_ds,\
     use_multiprocessing=False, workers=4)

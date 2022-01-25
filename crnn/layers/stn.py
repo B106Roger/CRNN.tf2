@@ -25,17 +25,20 @@ class BilinearInterpolation(Layer):
             self.input_channel=input_shapes[0][-1]
         else:
             self.input_channel=input_shapes[-1]
-        super(BilinearInterpolation, self).build(input_shapes)
+        # super(BilinearInterpolation, self).build(input_shapes)
 
     def compute_output_shape(self, input_shapes):
         '''
-        input_shapes: list, list of two tensor shape
-            tensors[0], tuple, (None, h, w, 3), shape of images
-            tenosrs[1], tuple, (None, 6), shape of transformation mats
+        input_shapes: list, list of two tf.TensorShape objects
+            tensors[0], TensorShape, (None, h, w, 3), shape of images
+            tenosrs[1], TensorShape, (None, 6), shape of transformation mats
         '''
         height = self.output_size[0]
         width = self.output_size[1]
-        return (None, height, width, input_shapes[0][-1])
+        return tf.TensorShape([input_shapes[0][0], height, width, input_shapes[0][-1]])
+
+    def count_params(self):
+        return 0
 
     @tf.function(experimental_relax_shapes=True)
     def call(self, tensors, mask=None):
