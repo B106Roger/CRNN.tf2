@@ -354,7 +354,9 @@ class InferenceModel:
                     ])
             
 
-        if self.model_format!='tflite': model.compile()
+        if self.model_format!='tflite': 
+            model.compile()
+            model.summary()
 
         self.model = model
     

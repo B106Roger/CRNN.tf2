@@ -23,5 +23,5 @@ This is a re-implementation of the CRNN network, build by TensorFlow 2. This rep
     - note that use --fp32, --fp16, --int8 to specify the model you want to export \
         if you only want to export int8 model, then you can just use --int8 \ 
         and drop the other two flags.
-6. Use `python ./crnn/eval_full_tflite.py --config HEAVY_STN_CONFIG --weight TFLITE_WEIGHT`
+6. Use `python ./crnn/eval_full_tflite.py --config HEAVY_STN_CONFIG --crnn_weight TFLITE_WEIGHT`
     - this script would evaluate the performance of tflite model

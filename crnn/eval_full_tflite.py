@@ -10,9 +10,9 @@ import cv2
 import tensorflow_addons as tfa
 import time
 from models import InferenceModel
-from decoders import CTCGreedyDecoder
+from decoders import CTCGreedyDecoder, CTCBeamSearchDecoder
 from dataset_factory import DatasetBuilder
-from metrics import BoxAccuracy, SequenceAccuracy
+from metrics import BoxAccuracy, SequenceAccuracy, SequenceTop5Accuracy
 from layers.stn import BilinearInterpolation
 
 def save_result(img, result, decoder, label, prefix='1', ):
@@ -22,6 +22,7 @@ def save_result(img, result, decoder, label, prefix='1', ):
     """
     img=(img*255.0).astype(np.uint8)
     result, scores=decoder(result)
+    scores = scores.numpy()
     label=tf.sparse.to_dense(label, -1)
     
     for i, (a_img, a_result, score, a_label) in enumerate(zip(img, result, scores, label)):
@@ -33,6 +34,7 @@ def save_result(img, result, decoder, label, prefix='1', ):
         a_label=a_label.numpy()
         a_label=[str(item-1)  for item in a_label if item != -1]
         a_label=''.join(a_label)
+        # print('scores', scores)
         # Put Prediction Result
         cv2.putText(a_canvas, word, (0,10), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3, color=(255,255,255))
         cv2.putText(a_canvas, f'{score:4.2f}', (0,40), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.3, color=(255,255,255))
@@ -47,7 +49,8 @@ def save_result(img, result, decoder, label, prefix='1', ):
         cv2.imwrite(f'demo/{correct}/{prefix}_{i}.jpg', a_img[...,::-1])
 
 def evaluation(crnn_model, model_aspect_ratio, dataset, bin=[115,256,576], visualize=False, decoder=None, point4=True):
-    seq_metric=SequenceAccuracy()
+    seq_metric=SequenceTop5Accuracy()
+    # seq_metric=SequenceAccuracy()
     box_metric=BoxAccuracy()
     bin_of_correct=np.zeros((len(bin)+1,), dtype=np.int32)
     bin_of_wrong=np.zeros((len(bin)+1,), dtype=np.int32)
@@ -190,7 +193,7 @@ def evaluation(crnn_model, model_aspect_ratio, dataset, bin=[115,256,576], visua
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help='The config file path.')
-    parser.add_argument('--crnn_weight', type=str, default='', required=False, help='The saved crnn path.(h5py and savemodel format supported')
+    parser.add_argument('--crnn_weight', type=str, default='', required=False, help='The merged crnn path.(tflite and savemodel format supported')
 
     args = parser.parse_args()
 
@@ -221,7 +224,9 @@ if __name__=='__main__':
     ######## Load Model            ########
     #######################################
     crnn_model=InferenceModel(args.crnn_weight, 'crnn_model', 'crnn_model')
+    # decoder=CTCBeamSearchDecoder(parse_config['dataset_builder']['table_path'])
     decoder=CTCGreedyDecoder(parse_config['dataset_builder']['table_path'])
+    
     # w/h
     model_aspect_ratio=crnn_model.input_shape[2] / crnn_model.input_shape[1]
 

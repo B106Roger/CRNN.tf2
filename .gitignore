@@ -15,3 +15,4 @@ crnn/label_generate.py
 logs_crnn/
 logs_stn/
 full_model_list/
+checkpoints/

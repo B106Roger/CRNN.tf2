@@ -38,7 +38,7 @@ if gpus:
         # Visible devices must be set before GPUs have been initialized
         print(e)
 
-batch_size=256
+batch_size=4 #256
 
 with open(args.config) as f:
     parse_config = yaml.load(f, Loader=yaml.Loader)
@@ -58,7 +58,7 @@ os.makedirs(true_path, exist_ok=True)
 
 dataset_builder = DatasetBuilder(**config['dataset_builder'],  require_coords=True, location_only=True)
 ds = dataset_builder(config['ann_paths'], config['batch_size'], False, args.slice)
-val_ds = dataset_builder(train_conf['val_ann_paths'], batch_size, False, args.slice)
+val_ds = dataset_builder(train_conf['val_ann_paths'], 1, False, args.slice)
 model = tf.keras.models.load_model(args.structure, custom_objects={
     'BilinearInterpolation': BilinearInterpolation
 }, compile=False)
@@ -210,4 +210,4 @@ for i, (images, a) in enumerate(val_ds):
 # plt.legend([t_points, f_points], ['True', 'False'])
 # plt.savefig(os.path.join(stn_vis_dir, 'area.png'))
 print('Total: ', total)
-print('Accuracy: ', acc/total)
+print('Accuracy: ', acc/total if acc != 0 else 0)

@@ -59,6 +59,6 @@ class CTCBeamSearchDecoder(CTCDecoder):
         strings = []
         for i in range(self.top_paths):
             strings.append(self.detokenize(decoded[i]))
-        strings = tf.concat(strings, 1)
+        # strings = tf.concat(strings, 1)
         probability = tf.math.exp(log_probability)
         return strings, probability
